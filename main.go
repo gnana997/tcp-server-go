@@ -5,17 +5,27 @@ import (
 	"net"
 )
 
+type Message struct {
+	from    string
+	payload []byte
+}
+
 type Server struct {
 	listenAddr string
 	ln         net.Listener
 	// channel with struct as empty struct takes no space
 	quitch chan struct{}
+	// channel with byte type as it can accept any data type
+	msgCh chan Message
 }
 
 func NewServer(listenAddr string) *Server {
 	return &Server{
 		listenAddr: listenAddr,
 		quitch:     make(chan struct{}),
+		// adding the buffer of 10 to the channel as it will block the the go routines
+		// until the msg gets processed from the channel
+		msgCh: make(chan Message, 10),
 	}
 }
 
@@ -37,6 +47,9 @@ func (s *Server) Start() error {
 
 	//wait for the quitch channel
 	<-s.quitch
+
+	// close the msg channel to let the consumers of msg channel know that the channel is closed
+	close(s.msgCh)
 
 	// if the quitch channel is completed then return nil and listener will get closed
 	return nil
@@ -81,15 +94,24 @@ func (s *Server) readLoop(conn net.Conn) {
 			continue
 		}
 
-		// to get the exact message from the buffer
-		msg := buf[:n]
-
-		// printing the bytes read from the connection
-		fmt.Println(string(msg))
+		// send the message and from details to the channel
+		s.msgCh <- Message{
+			from:    conn.RemoteAddr().String(),
+			payload: buf[:n],
+		}
 	}
 }
 
 func main() {
 	server := NewServer(":3000")
+
+	// unblocking function which continously consumes the messages
+	// sent to the server from the connections
+	go func() {
+		for msg := range server.msgCh {
+			fmt.Printf("recieved message from connection (%s): %s\n", msg.from, string(msg.payload))
+		}
+	}()
+
 	server.Start()
 }
